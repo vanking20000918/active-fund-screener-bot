@@ -1,0 +1,12 @@
+# 量化引擎（移植自 fund_screener）
+akshare>=1.12.0
+pandas>=2.0.0
+numpy>=1.24.0
+openpyxl>=3.1.0
+requests>=2.31
+lxml>=4.9.0
+
+# 卡片 / 视频 / 推送（移植自 quota-bot 媒体流水线）
+pillow>=10.0
+edge-tts>=6.1
+imageio-ffmpeg>=0.4

@@ -1,0 +1,12 @@
+# 每周产物（CI 走 artifact + 企业微信推送，不入库；data/ 快照入库供下周对比）
+output/
+cache/
+run.log
+
+__pycache__/
+*.pyc
+*.bak
+.env
+
+# 本地工具配置（含本机绝对路径，不入库）
+.claude/

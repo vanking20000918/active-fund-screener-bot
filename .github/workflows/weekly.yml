@@ -1,0 +1,55 @@
+name: weekly-fund-report
+on:
+  schedule:
+    # 每周六 UTC 01:13 ≈ 北京时间周六 09:13（错开整点调度高峰）
+    - cron: "13 1 * * 6"
+  workflow_dispatch:    # 手动触发（测试用）
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 安装中文字体与依赖
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq fonts-noto-cjk
+          pip install -r requirements.txt
+
+      - name: 筛选 + 评分 + 回测 + 生成素材
+        run: python main.py
+
+      - name: 合成播报视频（TTS 失败不阻塞）
+        continue-on-error: true
+        run: python video.py
+
+      - name: 推送到企业微信 / Telegram
+        env:
+          WECOM_WEBHOOK: ${{ secrets.WECOM_WEBHOOK }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: python notify.py
+
+      - name: 保存本期榜单快照（供下周对比"新进/名次变动"）
+        run: |
+          git config user.name "fund-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add data/
+          git commit -m "snapshot $(date +%F)" || echo "no changes"
+          git push
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fund-report-${{ github.run_id }}
+          path: output/
+          retention-days: 30
