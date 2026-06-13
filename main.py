@@ -94,13 +94,23 @@ def _save_snapshot(funds, cur_key):
 
 
 def _jsonable(v):
+    # NaN / NaT 归一为 None（二者自身不等于自身）
     try:
-        if v is None or (isinstance(v, float) and math.isnan(v)):
+        if v is None or v != v:
             return None
-    except TypeError:
+    except Exception:
         pass
-    if hasattr(v, "item"):       # numpy 标量
-        return v.item()
+    # 时间类型（pd.Timestamp 继承 datetime）→ ISO 字符串
+    if isinstance(v, (datetime.datetime, datetime.date)):
+        return v.isoformat()
+    if hasattr(v, "item"):       # numpy 标量 → python 标量
+        try:
+            iv = v.item()
+            if isinstance(iv, (datetime.datetime, datetime.date)):
+                return iv.isoformat()
+            return iv
+        except Exception:
+            pass
     return v
 
 
