@@ -26,8 +26,8 @@ jobs:
           sudo apt-get install -y -qq fonts-noto-cjk fonts-noto-cjk-extra
           pip install -r requirements.txt
 
-      - name: 筛选 + 评分 + 回测 + 生成素材
-        run: python main.py
+      - name: 筛选 + 评分 + 生成素材（周更不跑回测：回测为固定历史验证，逐窗口串行抓 NAV 太慢会超时）
+        run: python main.py --no-backtest
 
       - name: 合成播报视频（TTS 失败不阻塞）
         continue-on-error: true
