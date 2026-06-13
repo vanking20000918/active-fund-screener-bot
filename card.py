@@ -68,11 +68,21 @@ _GRADE_COLOR = {
 # ---------- 字体 ----------
 
 def _find_font():
-    """按平台找可用的中文字体 (bold_path, regular_path, ttc_index)。"""
+    """按平台找可用的中文字体 (bold_path, regular_path, ttc_index)。
+
+    注意: ubuntu 的 fonts-noto-cjk 只含 Regular, Bold 在 fonts-noto-cjk-extra;
+    因此这里在 Bold 缺失时回退到用 Regular 兼作粗体, 保证只装 fonts-noto-cjk
+    也能跑(CI 已额外装 -extra 以获得真正的粗体)。
+    """
     candidates = [
         (r"C:\Windows\Fonts\msyhbd.ttc", r"C:\Windows\Fonts\msyh.ttc", 0),
         ("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
          "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 2),
+        # 仅装 fonts-noto-cjk(无独立 Bold) 时, Regular 兼作粗体
+        ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 2),
+        ("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+         "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc", 0),
         ("/System/Library/Fonts/PingFang.ttc",
          "/System/Library/Fonts/PingFang.ttc", 0),
     ]
