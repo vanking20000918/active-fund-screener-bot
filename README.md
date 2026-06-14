@@ -66,6 +66,7 @@ python video.py 2026-06-13       # 为指定日期合成视频（读 output/payl
 - `cover_YYYY-MM-DD.png` — 周报封面卡（1080×1440）
 - `card_YYYY-MM-DD.png` — Top20 排行长图（1080 宽）
 - `report_YYYY-MM-DD.xlsx` — Excel 明细（Top20 / 全部候选 / 回测）
+- `score_detail_YYYY-MM-DD.xlsx` — 评分明细（硬筛通过基金的 6 维子分 + 加权贡献 + 背后原始指标，便于横向对比）
 - `payload_YYYY-MM-DD.json` — 媒体载荷（video.py 读取，免重跑筛选）
 - `video_YYYY-MM-DD.mp4` — 1080×1920 竖版播报视频
 

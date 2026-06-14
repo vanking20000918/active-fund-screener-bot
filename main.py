@@ -12,6 +12,7 @@
   card_YYYY-MM-DD.png    Top20 排行长图（完整榜单）
   text_YYYY-MM-DD.txt    通用文案（不分平台）
   report_YYYY-MM-DD.xlsx Excel 明细（Top20 + 全部 + 回测）
+  score_detail_YYYY-MM-DD.xlsx 评分明细（硬筛通过基金的 6 维子分/贡献/原始指标，便于对比）
 同时把本期榜单快照写入 data/YYYY-MM-DD.json，供下周对比「新进 / 名次变动」。
 
 推送由 notify.py 负责（读 WECOM_WEBHOOK / TG_*），视频由 video.py 合成。
@@ -41,6 +42,16 @@ logger = logging.getLogger("main")
 
 # Top20 排行长图里展示的关键列（写入 Excel 时也用）
 SNAPSHOT_COLS = ["基金代码", "基金简称", "基金经理", "综合得分", "评级"]
+
+# 评分明细各维度: (展示名, 子分列名, config.SCORE_WEIGHTS 键, 背后原始指标列)
+SCORE_DIMENSIONS = [
+    ("稳定性", "得分_稳定性", "stability", "业绩排名分位"),
+    ("熊市",   "得分_熊市",   "bear_perf", "熊市平均回撤"),
+    ("任职",   "得分_任职",   "tenure",    "经理任职年限"),
+    ("框架",   "得分_框架",   "framework", "卡玛比率"),
+    ("风格",   "得分_风格",   "style",     "行业稳定性"),
+    ("规模",   "得分_规模",   "scale",     "基金规模"),
+]
 
 
 # ---------------- 月份 / 快照 ----------------
@@ -199,6 +210,55 @@ def write_excel(top_df, all_df, rolling, path):
     logger.info(f"已写出: {path}")
 
 
+def write_score_detail_excel(all_df, path):
+    """评分明细：每只硬筛通过基金的 6 维子分 + 加权贡献 + 背后原始指标，
+    单列对齐便于横向对比子分来源（report.xlsx 那份列太杂，不利于盯单维度）。"""
+    import pandas as pd
+    from src.config import SCORE_WEIGHTS
+
+    if "硬筛通过" in all_df.columns:
+        df = all_df[all_df["硬筛通过"] == True].copy()
+    else:
+        df = all_df.copy()
+    if "综合得分" not in df.columns:
+        logger.warning("评分明细：无『综合得分』列，跳过")
+        return
+    df = df.sort_values("综合得分", ascending=False).reset_index(drop=True)
+
+    out = pd.DataFrame()
+    out["排名"] = range(1, len(df) + 1)
+    for col in ["基金代码", "基金简称", "基金经理", "基金类型"]:
+        if col in df.columns:
+            out[col] = df[col].values
+    out["综合得分"] = pd.to_numeric(df["综合得分"], errors="coerce").round(2).values
+    if "评级" in df.columns:
+        out["评级"] = df["评级"].values
+
+    # 6 维子分（列名带权重）+ 该维加权贡献（子分×权重，加总≈综合得分）
+    for label, score_col, wkey, _raw in SCORE_DIMENSIONS:
+        if score_col not in df.columns:
+            continue
+        w = SCORE_WEIGHTS.get(wkey, 0)
+        s = pd.to_numeric(df[score_col], errors="coerce")
+        out[f"{label}分(×{w})"] = s.round(1).values
+        out[f"{label}贡献"] = (s * w).round(2).values
+
+    # 背后原始指标，便于核对子分由来
+    raw_cols = ["业绩排名分位", "卡玛比率", "经理任职年限", "基金规模",
+                "熊市平均回撤", "熊市回撤分位", "熊市数", "行业稳定性",
+                "年化波动率", "近3年最大回撤", "年化收益率", "夏普比率"]
+    for col in raw_cols:
+        if col in df.columns:
+            out[col] = pd.to_numeric(df[col], errors="coerce").round(2).values
+
+    with pd.ExcelWriter(path, engine="openpyxl") as w:
+        out.to_excel(w, sheet_name="评分明细", index=False)
+        wrows = [{"维度": label, "权重": SCORE_WEIGHTS.get(wkey, 0), "背后原始指标": raw}
+                 for label, _sc, wkey, raw in SCORE_DIMENSIONS]
+        pd.DataFrame(wrows).to_excel(w, sheet_name="权重说明", index=False)
+    logger.info(f"已写出评分明细（{len(out)} 只）: {path}")
+
+
 # ---------------- 合成数据（--mock） ----------------
 
 def _mock_run():
@@ -305,6 +365,10 @@ def main():
             write_excel(top_df, all_df, rolling, OUT / f"report_{cur_key}.xlsx")
         except Exception as e:
             logger.warning(f"Excel 生成失败，跳过：{e}")
+        try:
+            write_score_detail_excel(all_df, OUT / f"score_detail_{cur_key}.xlsx")
+        except Exception as e:
+            logger.warning(f"评分明细 Excel 生成失败，跳过：{e}")
 
     logger.info(f"完成：{cover.name} / {card_img.name} / text_{cur_key}.txt")
     print(f"完成：output/{cover.name}")
