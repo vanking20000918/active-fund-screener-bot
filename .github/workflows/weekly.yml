@@ -1,9 +1,13 @@
 name: weekly-fund-report
 on:
+  # 注意：槽位不能早过 UTC 00:00，否则跨到前一个 UTC 日，交易日判断与快照日期会错位。
   schedule:
-    # 每周六 UTC 01:13 ≈ 北京时间周六 09:13（错开整点调度高峰）
-    - cron: "13 1 * * 6"
-  workflow_dispatch:    # 手动触发（测试用）
+    - cron: "14 0 * * 1-5"   # UTC 00:14 ≈ 北京 08:14（主槽，贴着 0 点又避开正点高峰）
+    - cron: "33 0 * * 1-5"   # 北京 08:33 兜底
+    - cron: "57 0 * * 1-5"   # 北京 08:57 兜底
+    - cron: "21 1 * * 1-5"   # 北京 09:21 兜底
+    - cron: "47 1 * * 1-5"   # 北京 09:47 兜底（最后一道）
+  workflow_dispatch:          # 手动触发（测试用，跳过交易日与判重检查）
 
 permissions:
   contents: write
@@ -26,14 +30,25 @@ jobs:
           sudo apt-get install -y -qq fonts-noto-cjk fonts-noto-cjk-extra
           pip install -r requirements.txt
 
+      # 判重 + 交易日守卫：兜底槽位空跑时 run=false，闸住后续全部步骤。
+      # 一周只出一期；非交易日跳过；手动触发(workflow_dispatch)一律放行。
+      - name: 判重 + 交易日守卫
+        id: guard
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+        run: python main.py --check >> "$GITHUB_OUTPUT"
+
       - name: 筛选 + 评分 + 生成素材（周更不跑回测：回测为固定历史验证，逐窗口串行抓 NAV 太慢会超时）
+        if: steps.guard.outputs.run == 'true'
         run: python main.py --no-backtest
 
       - name: 合成播报视频（TTS 失败不阻塞）
+        if: steps.guard.outputs.run == 'true'
         continue-on-error: true
         run: python video.py
 
       - name: 推送到企业微信 / Telegram
+        if: steps.guard.outputs.run == 'true'
         env:
           WECOM_WEBHOOK: ${{ secrets.WECOM_WEBHOOK }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
@@ -41,6 +56,7 @@ jobs:
         run: python notify.py
 
       - name: 保存本期榜单快照（供下周对比"新进/名次变动"；推送失败不阻塞）
+        if: steps.guard.outputs.run == 'true'
         run: |
           git config user.name "fund-bot"
           git config user.email "bot@users.noreply.github.com"
@@ -49,7 +65,7 @@ jobs:
           git push || echo "::warning::快照推送失败，请检查 Settings→Actions→Workflow permissions 为 Read and write"
 
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: always() && steps.guard.outputs.run == 'true'
         with:
           name: fund-report-${{ github.run_id }}
           path: output/

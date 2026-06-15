@@ -125,6 +125,58 @@ def _jsonable(v):
     return v
 
 
+# ---------------- 判重 + 交易日守卫 ----------------
+# 周更改为多兜底槽位（Mon-Fri 多次）后，需保证「一周只出一期」且不在非交易日空跑。
+# 决策放在 main(--check) 里输出给 CI，由 workflow 用 step output 闸住后续步骤。
+
+def _reported_this_week(cur_date):
+    """本周（周一至今）是否已有成功快照。返回命中的日期串(YYYY-MM-DD)或 None。
+    快照仅在一次完整成功的 run 末尾写入，故它就是「本期已出」的可靠标记；
+    半途失败（无快照）→ 后续兜底槽位会重试，正是我们要的。"""
+    if not DATA.exists():
+        return None
+    week_start = cur_date - datetime.timedelta(days=cur_date.weekday())
+    hit = None
+    for p in DATA.glob("*.json"):
+        try:
+            d = datetime.date.fromisoformat(p.stem)
+        except ValueError:
+            continue
+        if week_start <= d <= cur_date and (hit is None or d > datetime.date.fromisoformat(hit)):
+            hit = p.stem
+    return hit
+
+
+def _is_trading_day(d):
+    """用 akshare 上交所交易日历判断 d 是否 A 股交易日（含节假日/调休补班）。
+    日历获取失败时 fail-open（返回 True）：宁可多出一次也不漏播，判重已防同周重复。"""
+    try:
+        import akshare as ak
+        import pandas as pd
+        cal = ak.tool_trade_date_hist_sina()
+        days = set(pd.to_datetime(cal["trade_date"]).dt.date)
+        return d in days
+    except Exception as e:
+        logger.warning(f"交易日历获取失败，按交易日处理：{e}")
+        return True
+
+
+def _should_run(date, argv):
+    """判定本次调度是否应执行：先判重（免费、本地）后查交易日（联网）。
+    返回 (run: bool, reason: str)。手动触发 / --force / --mock 一律放行。"""
+    import os
+    forced = ("--force" in argv or "--mock" in argv
+              or os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch")
+    if forced:
+        return True, "forced（手动触发 / --force / --mock）"
+    hit = _reported_this_week(date)
+    if hit:
+        return False, f"本周已生成报告 data/{hit}.json"
+    if not _is_trading_day(date):
+        return False, f"{date} 非 A 股交易日"
+    return True, "本周未出且为交易日"
+
+
 # ---------------- 回测 → 上下文 ----------------
 
 def _annualize(r_pct, days):
@@ -310,6 +362,14 @@ def main():
         raw = argv[argv.index("--date") + 1]
         parts = [int(x) for x in raw.split("-")]
         date = datetime.date(parts[0], parts[1], parts[2] if len(parts) > 2 else 1)
+
+    # 守卫模式：只输出「是否应执行」给 CI（写入 $GITHUB_OUTPUT），不做任何抓取。
+    # run= 行走 stdout，日志走 stderr，二者不串。
+    if "--check" in argv:
+        run, reason = _should_run(date, argv)
+        logger.info(f"[guard] run={run} :: {reason}")
+        print(f"run={'true' if run else 'false'}")
+        return
 
     OUT.mkdir(exist_ok=True)
     cur_key = _run_key(date)
