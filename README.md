@@ -75,8 +75,21 @@ python video.py 2026-06-13       # 为指定日期合成视频（读 output/payl
 ## 部署到 GitHub Actions
 
 1. 推送本仓库到 GitHub（建议**私有仓库**，避免输出泄露），Settings → Actions 启用。
-2. `weekly.yml` 已配置每周六 UTC 01:13（北京时间约 09:13）触发。
-   注意 GitHub schedule 不保证准点，高峰期可能延迟数小时。
+2. **调度方式**：`weekly.yml` 以**外部触发为主**。GitHub 内置的 schedule cron 不保证
+   准点（高峰期常延迟数十分钟甚至整批丢弃），因此改由一个你可控的外部调度器
+   （cron-job.org / VPS crontab / 云函数等）**每周六北京 08:05** 调用 GitHub API 派发
+   `repository_dispatch`（事件类型 `weekly-trigger`），触发延迟从数十分钟降到几秒。
+   workflow 内仍保留少量周六 schedule 槽位作**兜底**，外部调度器宕机时接管。
+   两条触发路径都走 `main.py --check` 的判重 + 周六守卫（本周已出或非周六则跳过），幂等安全。
+
+   **配置外部触发**（以 cron-job.org 为例）：
+   - GitHub → Settings → Developer settings → **Fine-grained token**，授权本仓库
+     `Contents: Read and write`，复制 `github_pat_...`。
+   - cron-job.org 新建任务：URL
+     `https://api.github.com/repos/<owner>/<repo>/dispatches`，方法 `POST`，
+     Header `Authorization: Bearer <PAT>`、`Accept: application/vnd.github+json`，
+     Body `{"event_type":"weekly-trigger"}`，时区 Asia/Shanghai、**仅周六 08:05** 触发。
+   - 成功返回 HTTP 204；到仓库 Actions 页可见来源 `repository_dispatch` 的运行。
 3. Settings → Secrets and variables → Actions 配置推送通道（二选一或都配）：
    - `WECOM_WEBHOOK`：企业微信群机器人 webhook 完整 URL
    - `TG_BOT_TOKEN` + `TG_CHAT_ID`：Telegram 机器人 token 与会话 ID
