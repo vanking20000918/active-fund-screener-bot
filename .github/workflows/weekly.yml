@@ -1,13 +1,23 @@
 name: weekly-fund-report
 on:
-  # 注意：槽位不能早过 UTC 00:00，否则跨到前一个 UTC 日，交易日判断与快照日期会错位。
+  # 主触发：由外部可靠调度器（cron-job.org / VPS crontab 等）每周六到点调用 GitHub API
+  # 派发 repository_dispatch(event_type=weekly-trigger)。GitHub 的执行引擎可靠，不可靠的
+  # 只是它内置的 schedule cron——把"定时"交给外部，触发延迟从几十分钟/丢弃降到几秒。
+  # repository_dispatch 会走 main.py --check 的判重 + 周六守卫（与 schedule 同路径），
+  # 因此非周六/本周已出会自动跳过，安全幂等。
+  repository_dispatch:
+    types: [weekly-trigger]
+  # 兜底：万一外部调度器宕机，仍保留少量周六 schedule 槽位。GitHub 定时是"尽力而为"，
+  # 高峰期常延迟甚至跳过，故只稀疏留几个非整点槽位（避开 :00/:30 高峰），命中其一即可，
+  # 其余靠判重跳过。注意：① 槽位不能早过 UTC 00:00（周六），否则跨到周五、被周六守卫判跳过；
+  #         ② day-of-week 用 6（周六）。
   schedule:
-    - cron: "14 0 * * 1-5"   # UTC 00:14 ≈ 北京 08:14（主槽，贴着 0 点又避开正点高峰）
-    - cron: "33 0 * * 1-5"   # 北京 08:33 兜底
-    - cron: "57 0 * * 1-5"   # 北京 08:57 兜底
-    - cron: "21 1 * * 1-5"   # 北京 09:21 兜底
-    - cron: "47 1 * * 1-5"   # 北京 09:47 兜底（最后一道）
-  workflow_dispatch:          # 手动触发（测试用，跳过交易日与判重检查）
+    - cron: "5 0 * * 6"     # 北京周六 08:05（贴着 0 点又避开正点高峰）
+    - cron: "26 0 * * 6"    # 北京周六 08:26 兜底
+    - cron: "53 0 * * 6"    # 北京周六 08:53 兜底
+    - cron: "23 1 * * 6"    # 北京周六 09:23 兜底
+    - cron: "47 1 * * 6"    # 北京周六 09:47 兜底（最后一道）
+  workflow_dispatch:          # 手动触发（测试用，跳过守卫与判重检查）
 
 permissions:
   contents: write
@@ -30,9 +40,9 @@ jobs:
           sudo apt-get install -y -qq fonts-noto-cjk fonts-noto-cjk-extra
           pip install -r requirements.txt
 
-      # 判重 + 交易日守卫：兜底槽位空跑时 run=false，闸住后续全部步骤。
-      # 一周只出一期；非交易日跳过；手动触发(workflow_dispatch)一律放行。
-      - name: 判重 + 交易日守卫
+      # 判重 + 周六守卫：兜底槽位空跑时 run=false，闸住后续全部步骤。
+      # 一周只出一期；非周六跳过；手动触发(workflow_dispatch)一律放行。
+      - name: 判重 + 周六守卫
         id: guard
         env:
           GITHUB_EVENT_NAME: ${{ github.event_name }}

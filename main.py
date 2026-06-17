@@ -125,8 +125,9 @@ def _jsonable(v):
     return v
 
 
-# ---------------- 判重 + 交易日守卫 ----------------
-# 周更改为多兜底槽位（Mon-Fri 多次）后，需保证「一周只出一期」且不在非交易日空跑。
+# ---------------- 判重 + 周六守卫 ----------------
+# 周更固定每周六出一期：主触发为外部调度器派发的 repository_dispatch，外加少量周六
+# schedule 兜底槽位。需保证「一周只出一期」且只在周六放行（兜底槽位/误触发空跑时闸住）。
 # 决策放在 main(--check) 里输出给 CI，由 workflow 用 step output 闸住后续步骤。
 
 def _reported_this_week(cur_date):
@@ -147,22 +148,8 @@ def _reported_this_week(cur_date):
     return hit
 
 
-def _is_trading_day(d):
-    """用 akshare 上交所交易日历判断 d 是否 A 股交易日（含节假日/调休补班）。
-    日历获取失败时 fail-open（返回 True）：宁可多出一次也不漏播，判重已防同周重复。"""
-    try:
-        import akshare as ak
-        import pandas as pd
-        cal = ak.tool_trade_date_hist_sina()
-        days = set(pd.to_datetime(cal["trade_date"]).dt.date)
-        return d in days
-    except Exception as e:
-        logger.warning(f"交易日历获取失败，按交易日处理：{e}")
-        return True
-
-
 def _should_run(date, argv):
-    """判定本次调度是否应执行：先判重（免费、本地）后查交易日（联网）。
+    """判定本次调度是否应执行：先判重（免费、本地）后判是否周六。
     返回 (run: bool, reason: str)。手动触发 / --force / --mock 一律放行。"""
     import os
     forced = ("--force" in argv or "--mock" in argv
@@ -172,9 +159,9 @@ def _should_run(date, argv):
     hit = _reported_this_week(date)
     if hit:
         return False, f"本周已生成报告 data/{hit}.json"
-    if not _is_trading_day(date):
-        return False, f"{date} 非 A 股交易日"
-    return True, "本周未出且为交易日"
+    if date.weekday() != 5:  # 周一=0 … 周六=5
+        return False, f"{date} 非周六（周更只在周六出）"
+    return True, "本周未出且为周六"
 
 
 # ---------------- 回测 → 上下文 ----------------
