@@ -34,19 +34,36 @@ def _wecom_key(webhook):
     return re.search(r"key=([\w-]+)", webhook).group(1)
 
 
+def _check_wecom(r, what):
+    """企业微信 webhook/接口返回 JSON {errcode,errmsg}；HTTP 非 200 或 errcode!=0 视为失败。
+    以前这些返回值完全没检查，无效 key / 机器人被踢 / 限频都被吞掉，步骤照样绿勾。"""
+    if r.status_code != 200:
+        raise RuntimeError(f"企业微信 {what} HTTP {r.status_code}: {r.text[:200]}")
+    try:
+        j = r.json()
+    except ValueError:
+        return None
+    if j.get("errcode", 0) != 0:
+        raise RuntimeError(
+            f"企业微信 {what} 失败 errcode={j.get('errcode')} errmsg={j.get('errmsg')}")
+    return j
+
+
 def wecom_text(webhook, text):
-    requests.post(webhook, json={"msgtype": "text",
-                                 "text": {"content": text[:2000]}}, timeout=15)
+    r = requests.post(webhook, json={"msgtype": "text",
+                                     "text": {"content": text[:2000]}}, timeout=15)
+    _check_wecom(r, "text")
 
 
 def wecom_image(webhook, path):
     data = path.read_bytes()
     if len(data) <= 2 * 1024 * 1024:  # 图片消息限 2MB
-        requests.post(webhook, json={
+        r = requests.post(webhook, json={
             "msgtype": "image",
             "image": {"base64": base64.b64encode(data).decode(),
                       "md5": hashlib.md5(data).hexdigest()},
         }, timeout=30)
+        _check_wecom(r, "image")
     else:
         wecom_file(webhook, path)
 
@@ -61,12 +78,12 @@ def wecom_file(webhook, path):
           f"upload_media?key={key}&type=file")
     with path.open("rb") as f:
         r = requests.post(up, files={"media": (path.name, f)}, timeout=120)
-    media_id = r.json().get("media_id")
+    media_id = (_check_wecom(r, "upload_media") or {}).get("media_id")
     if not media_id:
-        print(f"[warn] 企业微信上传失败: {r.text[:200]}")
-        return
-    requests.post(webhook, json={"msgtype": "file",
-                                 "file": {"media_id": media_id}}, timeout=15)
+        raise RuntimeError(f"企业微信 upload_media 未返回 media_id: {r.text[:200]}")
+    r2 = requests.post(webhook, json={"msgtype": "file",
+                                      "file": {"media_id": media_id}}, timeout=15)
+    _check_wecom(r2, "file")
 
 
 # ---------------- Telegram ----------------
@@ -76,8 +93,21 @@ def tg_api(token, method, **kwargs):
                          timeout=120, **kwargs)
 
 
+def _check_tg(r, what):
+    """Telegram 返回 {ok:true/false}；非 200 或 ok=false 视为失败。"""
+    ok = r.status_code == 200
+    try:
+        ok = ok and r.json().get("ok", False)
+    except ValueError:
+        ok = False
+    if not ok:
+        raise RuntimeError(f"Telegram {what} 失败 HTTP {r.status_code}: {r.text[:200]}")
+    return r
+
+
 def tg_send(token, chat, text, photos, video):
-    tg_api(token, "sendMessage", data={"chat_id": chat, "text": text[:4000]})
+    _check_tg(tg_api(token, "sendMessage",
+                     data={"chat_id": chat, "text": text[:4000]}), "sendMessage")
     for photo in photos:
         if not photo.exists():
             continue
@@ -86,12 +116,13 @@ def tg_send(token, chat, text, photos, video):
                        data={"chat_id": chat}, files={"photo": f})
         if not r.json().get("ok"):   # 长图可能被拒，退化为文件
             with photo.open("rb") as f:
-                tg_api(token, "sendDocument",
-                       data={"chat_id": chat}, files={"document": f})
+                _check_tg(tg_api(token, "sendDocument",
+                                 data={"chat_id": chat}, files={"document": f}),
+                          "sendDocument")
     if video and video.exists():
         with video.open("rb") as f:
-            tg_api(token, "sendVideo",
-                   data={"chat_id": chat}, files={"video": f})
+            _check_tg(tg_api(token, "sendVideo",
+                             data={"chat_id": chat}, files={"video": f}), "sendVideo")
 
 
 # ---------------- 主流程 ----------------
@@ -136,24 +167,39 @@ def main():
 
     text_txt = text.read_text(encoding="utf-8") if text.exists() else ""
 
+    errors = []
     if webhook:
-        wecom_text(webhook, summary)
-        if text_txt:
-            wecom_text(webhook, "【纯文字】\n" + text_txt)
-        if cover.exists():
-            wecom_image(webhook, cover)
-        if card_img.exists():
-            wecom_image(webhook, card_img)
-        if video.exists():
-            wecom_file(webhook, video)
-        print("已推送到企业微信")
+        try:
+            wecom_text(webhook, summary)
+            if text_txt:
+                wecom_text(webhook, "【纯文字】\n" + text_txt)
+            if cover.exists():
+                wecom_image(webhook, cover)
+            if card_img.exists():
+                wecom_image(webhook, card_img)
+            if video.exists():
+                wecom_file(webhook, video)
+            print("已推送到企业微信")
+        except Exception as e:
+            errors.append(f"企业微信: {e}")
+            print(f"[error] 企业微信推送失败: {e}")
 
     if tg_token and tg_chat:
-        tg_send(tg_token, tg_chat,
-                summary + "\n\n【纯文字】\n" + text_txt,
-                [cover, card_img],
-                video if video.exists() else None)
-        print("已推送到 Telegram")
+        try:
+            tg_send(tg_token, tg_chat,
+                    summary + "\n\n【纯文字】\n" + text_txt,
+                    [cover, card_img],
+                    video if video.exists() else None)
+            print("已推送到 Telegram")
+        except Exception as e:
+            errors.append(f"Telegram: {e}")
+            print(f"[error] Telegram 推送失败: {e}")
+
+    # 任一通道失败即 exit 1：让 notify 步骤变红（而非被吞掉的绿勾），
+    # 后续「写快照」步骤随之跳过 → 本周不留快照 → 兜底槽位会重试，与既有重试设计一致。
+    if errors:
+        print(f"[error] 推送失败 {len(errors)} 处，退出码 1")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

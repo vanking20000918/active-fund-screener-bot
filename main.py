@@ -131,9 +131,11 @@ def _jsonable(v):
 # 决策放在 main(--check) 里输出给 CI，由 workflow 用 step output 闸住后续步骤。
 
 def _reported_this_week(cur_date):
-    """本周（周一至今）是否已有成功快照。返回命中的日期串(YYYY-MM-DD)或 None。
-    快照仅在一次完整成功的 run 末尾写入，故它就是「本期已出」的可靠标记；
-    半途失败（无快照）→ 后续兜底槽位会重试，正是我们要的。"""
+    """本周是否已出正式周报。返回命中的周六快照日期串(YYYY-MM-DD)或 None。
+    只认「周六」快照：周更固定周六出一期，周六快照才是「本期已出」的可靠标记。
+    周中(workflow_dispatch/--force/--mock)留下的测试快照 weekday!=5 一律忽略，
+    否则会把正式的周六自动档判重顶掉（早上静默不出就是这么来的）。
+    半途失败（无周六快照）→ 后续兜底槽位会重试，正是我们要的。"""
     if not DATA.exists():
         return None
     week_start = cur_date - datetime.timedelta(days=cur_date.weekday())
@@ -142,6 +144,8 @@ def _reported_this_week(cur_date):
         try:
             d = datetime.date.fromisoformat(p.stem)
         except ValueError:
+            continue
+        if d.weekday() != 5:          # 只认正式周六快照，周中测试快照不顶掉自动档
             continue
         if week_start <= d <= cur_date and (hit is None or d > datetime.date.fromisoformat(hit)):
             hit = p.stem
